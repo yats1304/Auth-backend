@@ -8,7 +8,11 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import sendMail from "../utils/sendMail.js";
 import { getOtpHtml, getVerifyEmailHtml } from "../utils/html.js";
-import { generateToken } from "../utils/generateToken.js";
+import {
+  generateAccessToken,
+  generateToken,
+  verifyRefreshToken,
+} from "../utils/generateToken.js";
 
 export const registerUser = TryCatch(async (req, res) => {
   const sanitizedBody = sanitize(req.body);
@@ -222,5 +226,50 @@ export const verifyOtp = TryCatch(async (req, res) => {
       name: user.name,
       email: user.email,
     },
+  });
+});
+
+export const MyProfile = TryCatch(async (req, res) => {
+  const user = req.user;
+
+  res.json(user);
+});
+
+export const refreshToken = TryCatch(async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (!refreshToken) {
+    throw new ErrorHandler(401, "Invalid refresh token!");
+  }
+
+  const decode = await verifyRefreshToken(refreshToken);
+
+  if (!decode) {
+    throw new ErrorHandler(401, "Invalid refresh token!");
+  }
+
+  generateAccessToken(decode.id, res);
+
+  res.json({
+    message: "Token refreshed!",
+  });
+});
+
+export const logoutUser = TryCatch(async (req, res) => {
+  const userId = req.user?._id;
+
+  if (!userId) {
+    throw new ErrorHandler(401, "Not authenticated");
+  }
+
+  await redisClient.del(`refresh_token:${userId}`);
+
+  res.clearCookie("refreshToken");
+  res.clearCookie("accessToken");
+
+  await redisClient.del(`user:${userId}`);
+
+  res.json({
+    message: "Logged out successfully",
   });
 });

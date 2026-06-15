@@ -13,8 +13,7 @@ export const generateToken = async (
     { id: userId },
     process.env.ACCESS_SECRET as string,
     {
-      // for testing it have exp time as 1m but in production change to 15m
-      expiresIn: "1m",
+      expiresIn: "15m",
     },
   );
 
@@ -34,8 +33,7 @@ export const generateToken = async (
     httpOnly: true,
     // secure: true,
     sameSite: "none",
-    // for dev purpose we are keeping it for 1 min
-    maxAge: 1 * 60 * 1000,
+    maxAge: 15 * 60 * 1000,
   });
 
   res.cookie("refreshToken", refreshToken, {
@@ -47,4 +45,38 @@ export const generateToken = async (
   });
 
   return { accessToken, refreshToken };
+};
+
+export const verifyRefreshToken = async (refreshToken: string) => {
+  try {
+    const decode = jwt.verify(
+      refreshToken,
+      process.env.REFRESH_SECRET as string,
+    ) as { id: string };
+
+    const storeToken = await redisClient.get(`refresh_token:${decode.id}`);
+
+    if (storeToken === refreshToken) {
+      return decode;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+};
+
+export const generateAccessToken = (
+  id: string | mongoose.Types.ObjectId,
+  res: Response,
+) => {
+  const accessToken = jwt.sign({ id }, process.env.ACCESS_SECRET as string, {
+    expiresIn: "15m",
+  });
+
+  res.cookie("accessToken", accessToken, {
+    httpOnly: true,
+    // secure: true,
+    sameSite: "none",
+    maxAge: 15 * 60 * 1000,
+  });
 };
