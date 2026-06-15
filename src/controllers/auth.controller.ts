@@ -1,6 +1,11 @@
 import { TryCatch } from "../utils/tryCatch.js";
 import sanitize from "mongo-sanitize";
-import { LoginSchema, registerSchema } from "../validators/auth.validator.js";
+import {
+  ChangePasswordSchema,
+  LoginSchema,
+  registerSchema,
+  ResetPasswordSchema,
+} from "../validators/auth.validator.js";
 import ErrorHandler from "../utils/errorHandler.js";
 import { redisClient } from "../config/redis.js";
 import { User } from "../models/auth.models.js";
@@ -353,11 +358,24 @@ export const verifyResetOtp = TryCatch(async (req, res) => {
 });
 
 export const resetPassword = TryCatch(async (req, res) => {
-  const { email, newPassword } = req.body;
+  const sanitizedBody = sanitize(req.body);
+  const validation = ResetPasswordSchema.safeParse(sanitizedBody);
 
-  if (!email || !newPassword) {
-    throw new ErrorHandler(400, "Please provide all details");
+  if (!validation.success) {
+    const zodError = validation.error;
+    let firstErrorMessage = "Validation failed!";
+    if (zodError?.issues && Array.isArray(zodError.issues)) {
+      const allErrors = zodError.issues.map((issue) => ({
+        field: issue.path ? issue.path.join(".") : "unknown",
+        message: issue.message || "Validation error!",
+        code: issue.code,
+      }));
+      firstErrorMessage = allErrors[0]?.message || "Validation error!";
+    }
+    throw new ErrorHandler(400, firstErrorMessage);
   }
+
+  const { email, newPassword } = validation.data;
 
   const verified = await redisClient.get(`verified_reset:${email}`);
 
@@ -377,7 +395,70 @@ export const resetPassword = TryCatch(async (req, res) => {
 
   await redisClient.del(`verified_reset:${email}`);
 
+  await generateToken(user._id, res);
+
   res.json({
-    message: "Password reset successfully!",
+    message: "Password reset successfully! Logged in successfully.",
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+    },
+  });
+});
+
+export const changePassword = TryCatch(async (req, res) => {
+  const sanitizedBody = sanitize(req.body);
+  const validation = ChangePasswordSchema.safeParse(sanitizedBody);
+
+  if (!validation.success) {
+    const zodError = validation.error;
+    let firstErrorMessage = "Validation failed!";
+    if (zodError?.issues && Array.isArray(zodError.issues)) {
+      const allErrors = zodError.issues.map((issue) => ({
+        field: issue.path ? issue.path.join(".") : "unknown",
+        message: issue.message || "Validation error!",
+        code: issue.code,
+      }));
+      firstErrorMessage = allErrors[0]?.message || "Validation error!";
+    }
+    throw new ErrorHandler(400, firstErrorMessage);
+  }
+
+  const { currentPassword, newPassword } = validation.data;
+
+  const userId = req.user?._id;
+
+  if (!userId) {
+    throw new ErrorHandler(404, "User not found");
+  }
+
+  const user = await User.findById(userId).select("+password");
+
+  if (!user) {
+    throw new ErrorHandler(404, "User not found");
+  }
+
+  const isPasswordMatch = await bcrypt.compare(currentPassword, user.password);
+
+  if (!isPasswordMatch) {
+    throw new ErrorHandler(400, "Current password is incorrect");
+  }
+
+  if (currentPassword === newPassword) {
+    throw new ErrorHandler(
+      400,
+      "New password cannot be same as current password",
+    );
+  }
+
+  const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+  user.password = hashedPassword;
+
+  await user.save();
+
+  res.json({
+    message: "Password changes successfully",
   });
 });
