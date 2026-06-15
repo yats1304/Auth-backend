@@ -7,7 +7,11 @@ import { User } from "../models/auth.models.js";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import sendMail from "../utils/sendMail.js";
-import { getOtpHtml, getVerifyEmailHtml } from "../utils/html.js";
+import {
+  getForgotPasswordOtpHtml,
+  getOtpHtml,
+  getVerifyEmailHtml,
+} from "../utils/html.js";
 import {
   generateAccessToken,
   generateToken,
@@ -271,5 +275,109 @@ export const logoutUser = TryCatch(async (req, res) => {
 
   res.json({
     message: "Logged out successfully",
+  });
+});
+
+export const forgotPassword = TryCatch(async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    throw new ErrorHandler(400, "Email is required!");
+  }
+
+  const ratelimitKey = `forgot-password-rate-limit:${req.ip}:${email}`;
+
+  if (await redisClient.get(ratelimitKey)) {
+    throw new ErrorHandler(429, "Too many requests, try again later");
+  }
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    throw new ErrorHandler(400, "User not found!");
+  }
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+  await redisClient.set(`reset_otp:${email}`, JSON.stringify(otp), { EX: 300 });
+
+  const subject = "Password Reset OTP";
+
+  const html = getForgotPasswordOtpHtml({ email, otp });
+
+  await sendMail({
+    email,
+    subject,
+    html,
+  });
+
+  await redisClient.set(ratelimitKey, "true", { EX: 60 });
+
+  res.json({
+    message: "OTP send successfully",
+  });
+});
+
+export const verifyResetOtp = TryCatch(async (req, res) => {
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    throw new ErrorHandler(400, "Please provide all details");
+  }
+
+  const storedOtpString = await redisClient.get(`reset_otp:${email}`);
+
+  if (!storedOtpString) {
+    throw new ErrorHandler(400, "OTP expired!");
+  }
+
+  const storedOtp = JSON.parse(storedOtpString);
+
+  if (storedOtp !== otp) {
+    throw new ErrorHandler(400, "Invalid OTP");
+  }
+
+  await redisClient.del(`reset_otp:${email}`);
+
+  await redisClient.set(`verified_reset:${email}`, "true", { EX: 300 });
+
+  let user = await User.findOne({ email });
+
+  if (!user) {
+    throw new ErrorHandler(404, "User not found!");
+  }
+
+  res.json({
+    message: "OTP Verified!",
+  });
+});
+
+export const resetPassword = TryCatch(async (req, res) => {
+  const { email, newPassword } = req.body;
+
+  if (!email || !newPassword) {
+    throw new ErrorHandler(400, "Please provide all details");
+  }
+
+  const verified = await redisClient.get(`verified_reset:${email}`);
+
+  if (!verified) {
+    throw new ErrorHandler(400, "OTP verification required");
+  }
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    throw new ErrorHandler(404, "User not found!");
+  }
+
+  user.password = await bcrypt.hash(newPassword, 10);
+
+  await user.save();
+
+  await redisClient.del(`verified_reset:${email}`);
+
+  res.json({
+    message: "Password reset successfully!",
   });
 });
